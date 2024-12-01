@@ -55,7 +55,7 @@ class PacManGame(arcade.Window):
         self.ghosts = [
             {"x": 10, "y": 8, "direction": LEFT},
             {"x": 10, "y": 12, "direction": LEFT},
-            {"x": 14, "y": 8, "direction": RIGHT},    
+            {"x": 14, "y": 8, "direction": RIGHT},
         ]
 
         self.points = []  # Liste des positions des points à récolter
@@ -216,6 +216,23 @@ class PacManGame(arcade.Window):
             if ghost["x"] == self.pacman_x and ghost["y"] == self.pacman_y:
                 self.game_over = True
 
+    def reset_game(self):
+        """Réinitialiser les variables du jeu pour recommencer une partie."""
+        self.pacman_x = 1
+        self.pacman_y = 1
+        self.pacman_direction = RIGHT
+        self.requested_direction = RIGHT
+        self.ghosts = [
+            {"x": 10, "y": 8, "direction": LEFT},
+            {"x": 10, "y": 12, "direction": LEFT},
+            {"x": 14, "y": 8, "direction": RIGHT},
+        ]
+        self.points = []
+        self.game_over = False
+        self.victory = False
+        self.setup_game()
+        self.time_since_last_move = 0
+
     def on_key_press(self, key, modifiers):
         """Gérer les entrées clavier pour diriger Pac-Man."""
         if key == arcade.key.UP:
@@ -226,6 +243,8 @@ class PacManGame(arcade.Window):
             self.requested_direction = LEFT
         elif key == arcade.key.RIGHT:
             self.requested_direction = RIGHT
+        elif key == arcade.key.R and (self.game_over or self.victory):
+            self.reset_game()
 
 
 if __name__ == "__main__":
