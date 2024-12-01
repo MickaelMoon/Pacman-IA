@@ -21,6 +21,11 @@ RIGHT = 3
 # Intervalle de mouvement (plus haut = plus lent)
 MOVE_INTERVAL = 0.1
 
+# Récompenses et pénalités
+REWARD_POINT = 10
+REWARD_GHOST = -100
+REWARD_WALL = -10
+REWARD_DEFAULT = -1
 
 class PacManGame(arcade.Window):
     def __init__(self):
