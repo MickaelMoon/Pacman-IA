@@ -56,11 +56,11 @@ class PacManGame(arcade.Window):
         self.pacman_direction = RIGHT
         self.requested_direction = RIGHT  # Direction demandée par le joueur
 
-        # Position initiale des fantômes
+        # Position initiale des fantômes avec types et couleurs
         self.ghosts = [
-            {"x": 10, "y": 8, "direction": LEFT},
-            {"x": 10, "y": 12, "direction": LEFT},
-            {"x": 14, "y": 8, "direction": RIGHT},
+            {"x": 10, "y": 8, "direction": LEFT, "type": "Blinky", "color": arcade.color.RED},
+            {"x": 10, "y": 12, "direction": LEFT, "type": "Pinky", "color": arcade.color.PINK},
+            {"x": 14, "y": 8, "direction": RIGHT, "type": "Inky", "color": arcade.color.CYAN},
         ]
 
         self.points = []  # Liste des positions des points à récolter
@@ -135,13 +135,13 @@ class PacManGame(arcade.Window):
             PACMAN_COLOR,
         )
 
-        # Création des fantômes
+        # Création des fantômes avec leurs couleurs respectives
         for ghost in self.ghosts:
             arcade.draw_circle_filled(
                 ghost["x"] * TILE_SIZE + TILE_SIZE // 2,
                 SCREEN_HEIGHT - (ghost["y"] * TILE_SIZE + TILE_SIZE // 2),
                 TILE_SIZE // 2,
-                arcade.color.RED,
+                ghost["color"],
             )
 
     def on_update(self, delta_time):
@@ -156,7 +156,7 @@ class PacManGame(arcade.Window):
 
         self.time_since_last_move = 0  # Réinitialisation du timer
 
-         # Calcul de la position demandée
+        # Calcul de la position demandée
         requested_x, requested_y = self.pacman_x, self.pacman_y
         if self.requested_direction == UP:
             requested_y -= 1
@@ -168,7 +168,10 @@ class PacManGame(arcade.Window):
             requested_x += 1
 
         # Tenter de changer de direction si possible
-        if self.requested_direction is not None and self.grid[requested_y][requested_x] != "#":
+        if (
+            self.requested_direction is not None
+            and self.grid[requested_y][requested_x] != "#"
+        ):
             # Si la direction demandée est possible, on l'applique
             self.pacman_direction = self.requested_direction
             self.pacman_x, self.pacman_y = requested_x, requested_y
@@ -202,24 +205,110 @@ class PacManGame(arcade.Window):
 
         # Déplacements des fantômes
         for ghost in self.ghosts:
-            ghost_new_x, ghost_new_y = ghost["x"], ghost["y"]
-            if ghost["direction"] == UP:
-                ghost_new_y -= 1
-            elif ghost["direction"] == DOWN:
-                ghost_new_y += 1
-            elif ghost["direction"] == LEFT:
-                ghost_new_x -= 1
-            elif ghost["direction"] == RIGHT:
-                ghost_new_x += 1
+            if ghost["type"] == "Blinky":
+                # Blinky suit Pac-Man directement
+                self.move_ghost_towards_target(ghost, self.pacman_x, self.pacman_y)
+            elif ghost["type"] == "Pinky":
+                # Pinky tente d'anticiper la position future de Pac-Man
+                target_x, target_y = self.pacman_x, self.pacman_y
+                if self.pacman_direction == UP:
+                    target_y -= 4
+                elif self.pacman_direction == DOWN:
+                    target_y += 4
+                elif self.pacman_direction == LEFT:
+                    target_x -= 4
+                elif self.pacman_direction == RIGHT:
+                    target_x += 4
 
-            if self.grid[ghost_new_y][ghost_new_x] == "#":
-                ghost["direction"] = random.choice([UP, DOWN, LEFT, RIGHT])
+                # Limiter la cible aux limites du labyrinthe
+                target_x = max(0, min(len(self.grid[0]) - 1, target_x))
+                target_y = max(0, min(len(self.grid) - 1, target_y))
+
+                self.move_ghost_towards_target(ghost, target_x, target_y)
+            elif ghost["type"] == "Inky":
+                # Inky suit souvent Blinky
+                blinky = next((g for g in self.ghosts if g["type"] == "Blinky"), None)
+                if blinky:
+                    self.move_ghost_towards_target(ghost, blinky["x"], blinky["y"])
+                else:
+                    self.move_ghost_randomly(ghost)
             else:
-                ghost["x"], ghost["y"] = ghost_new_x, ghost_new_y
+                # Comportement par défaut
+                self.move_ghost_randomly(ghost)
 
             # Vérifier la collision avec Pac-Man
             if ghost["x"] == self.pacman_x and ghost["y"] == self.pacman_y:
                 self.game_over = True
+
+    def move_ghost_towards_target(self, ghost, target_x, target_y):
+        """Déplace le fantôme vers une cible donnée."""
+        possible_directions = []
+
+        # Vérifier les directions possibles en évitant les murs
+        if self.grid[ghost["y"] - 1][ghost["x"]] != "#":  # UP
+            possible_directions.append(UP)
+        if self.grid[ghost["y"] + 1][ghost["x"]] != "#":  # DOWN
+            possible_directions.append(DOWN)
+        if self.grid[ghost["y"]][ghost["x"] - 1] != "#":  # LEFT
+            possible_directions.append(LEFT)
+        if self.grid[ghost["y"]][ghost["x"] + 1] != "#":  # RIGHT
+            possible_directions.append(RIGHT)
+
+        # Choisir la direction qui réduit la distance à la cible
+        min_distance = float('inf')
+        best_direction = None
+        for direction in possible_directions:
+            new_x, new_y = ghost["x"], ghost["y"]
+            if direction == UP:
+                new_y -= 1
+            elif direction == DOWN:
+                new_y += 1
+            elif direction == LEFT:
+                new_x -= 1
+            elif direction == RIGHT:
+                new_x += 1
+            distance = abs(new_x - target_x) + abs(new_y - target_y)
+            if distance < min_distance:
+                min_distance = distance
+                best_direction = direction
+
+        if best_direction is not None:
+            ghost["direction"] = best_direction
+            # Déplacer le fantôme dans la direction choisie
+            if ghost["direction"] == UP:
+                ghost["y"] -= 1
+            elif ghost["direction"] == DOWN:
+                ghost["y"] += 1
+            elif ghost["direction"] == LEFT:
+                ghost["x"] -= 1
+            elif ghost["direction"] == RIGHT:
+                ghost["x"] += 1
+        else:
+            # Si bloqué, bouger aléatoirement
+            self.move_ghost_randomly(ghost)
+
+    def move_ghost_randomly(self, ghost):
+        """Déplace le fantôme de manière aléatoire."""
+        possible_directions = []
+        if self.grid[ghost["y"] - 1][ghost["x"]] != "#":  # UP
+            possible_directions.append(UP)
+        if self.grid[ghost["y"] + 1][ghost["x"]] != "#":  # DOWN
+            possible_directions.append(DOWN)
+        if self.grid[ghost["y"]][ghost["x"] - 1] != "#":  # LEFT
+            possible_directions.append(LEFT)
+        if self.grid[ghost["y"]][ghost["x"] + 1] != "#":  # RIGHT
+            possible_directions.append(RIGHT)
+
+        if possible_directions:
+            ghost["direction"] = random.choice(possible_directions)
+            if ghost["direction"] == UP:
+                ghost["y"] -= 1
+            elif ghost["direction"] == DOWN:
+                ghost["y"] += 1
+            elif ghost["direction"] == LEFT:
+                ghost["x"] -= 1
+            elif ghost["direction"] == RIGHT:
+                ghost["x"] += 1
 
     def reset_game(self):
         """Réinitialiser les variables du jeu pour recommencer une partie."""
@@ -227,10 +316,11 @@ class PacManGame(arcade.Window):
         self.pacman_y = 1
         self.pacman_direction = RIGHT
         self.requested_direction = RIGHT
+        # Réinitialiser les fantômes avec types et couleurs
         self.ghosts = [
-            {"x": 10, "y": 8, "direction": LEFT},
-            {"x": 10, "y": 12, "direction": LEFT},
-            {"x": 14, "y": 8, "direction": RIGHT},
+            {"x": 10, "y": 8, "direction": LEFT, "type": "Blinky", "color": arcade.color.RED},
+            {"x": 10, "y": 12, "direction": LEFT, "type": "Pinky", "color": arcade.color.PINK},
+            {"x": 14, "y": 8, "direction": RIGHT, "type": "Inky", "color": arcade.color.CYAN},
         ]
         self.points = []
         self.game_over = False
