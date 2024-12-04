@@ -2,19 +2,20 @@ import os.path
 from random import choice
 import arcade
 import pickle
+import matplotlib.pyplot as plt
 
 MAZE = """
-###################
-#o..?#.......#...o#
-#.##.#.#####.#.##.#
-#.#.............#.#
-#.#.##.##G##.##.#.#
-#......#@@@#......#
-#.#.##.#####.##.#.#
-#.#.............#.#
-#.##.#.#####.#.##.#
-#o...#.......#...o#
-###################
+#################
+#o..?#.....#...o#
+#.##.#.###.#.##.#
+#.#...........#.#
+#.#.##.#G#.##.#.#
+#......#@#......#
+#.#.##.###.##.#.#
+#.#...........#.#
+#.##.#.###.#.##.#
+#o...#.....#...o#
+#################
 """
 
 TILE_WALL = '#'
@@ -23,7 +24,7 @@ TILE_COIN = '.'
 TILE_POWER_PELLET = 'o'
 TILE_GHOST = 'G'
 
-NUMBER_OF_COINS = 95
+NUMBER_OF_COINS = 87
 
 ACTION_UP = 'U'
 ACTION_DOWN = 'D'
@@ -98,11 +99,15 @@ class QTable:
 class Agent:
     def __init__(self, env):
         self.env = env
+        self.score_history = []
+        self.score = None
         self.reset()
         self.qtable = QTable()
         self.is_game_over = False  # Nouvel attribut pour vérifier si la partie est terminée
 
     def reset(self):
+        if self.score:
+            self.score_history.append(self.score)
         self.env.reset_maze()
         self.position = self.env.start
         self.score = 0
@@ -233,10 +238,9 @@ class MazeWindow(arcade.Window):
                 self.coins.append(pellet)
                 self.coin_sprites[state] = pellet
 
-        self.player = self.create_sprite(
-            'assets/pacman.png', agent.position)
-        self.ghost = self.create_sprite('assets/ghost_1.png',
-                                        self.env.ghost_position)
+        self.player = self.create_sprite('assets/pacman.png', agent.position)
+
+        self.ghost = self.create_sprite('assets/ghost_1.png',self.env.ghost_position)
 
     def reset_sprites(self):
         self.coins = arcade.SpriteList()
@@ -317,5 +321,8 @@ if __name__ == "__main__":
     arcade.run()
 
     agent.qtable.save('mouse.qtable')
+
+    plt.plot(agent.score_history)
+    plt.show()
 
     exit(0)
