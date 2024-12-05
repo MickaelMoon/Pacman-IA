@@ -19,7 +19,6 @@ MAZE = """
 """
 
 TILE_WALL = '#'
-TILE_VOID = '@'
 TILE_COIN = '.'
 TILE_POWER_PELLET = 'o'
 TILE_GHOST = 'G'
@@ -31,10 +30,10 @@ ACTION_DOWN = 'D'
 ACTION_LEFT = 'L'
 ACTION_RIGHT = 'R'
 ACTIONS = [ACTION_UP, ACTION_DOWN, ACTION_LEFT, ACTION_RIGHT]
-REWARD_OUT = -100
-REWARD_WALL = -100
-REWARD_COIN = 10
-REWARD_ALL_COINS_COLLECTED = 1000
+REWARD_OUT = -50
+REWARD_WALL = -20
+REWARD_COIN = 20
+REWARD_ALL_COINS_COLLECTED = 500
 REWARD_GAME_OVER = -1000  # Malus pour avoir touché un fantôme
 
 REWARD_DEFAULT = -1
@@ -58,16 +57,14 @@ class QTable:
         self.discount_factor = discount_factor
 
     def set(self, state, action, reward, new_state):
+        # Utiliser des tuples immuables pour les états
         if state not in self.dic:
             self.dic[state] = {ACTION_UP: 0, ACTION_DOWN: 0, ACTION_LEFT: 0, ACTION_RIGHT: 0}
         if new_state not in self.dic:
             self.dic[new_state] = {ACTION_UP: 0, ACTION_DOWN: 0, ACTION_LEFT: 0, ACTION_RIGHT: 0}
 
-        self.dic[state][action] += reward
-
         delta = reward + self.discount_factor * max(self.dic[new_state].values()) - self.dic[state][action]
         self.dic[state][action] += self.learning_rate * delta
-        # Q(s, a) = Q(s, a) + alpha * [reward + gamma * max(S', a) - Q(s, a)]
 
     def best_action(self, position):
         if position in self.dic:
@@ -109,6 +106,7 @@ class Agent:
         if self.score:
             self.score_history.append(self.score)
         self.env.reset_maze()
+        self.env.reset_ghost() # Réinitialisation de la position du fantôme
         self.position = self.env.start
         self.score = 0
         self.earned_coins = 0
@@ -118,17 +116,22 @@ class Agent:
         if not action:
             action = self.best_action()
 
-        new_position, reward = self.env.move(self.position, action)
+        # Ajouter la vision au state (sans inclure la position de l'agent)
+        vision = tuple(sorted(self.env.get_vision(self.position).items()))  # Convertir en tuple trié
+        current_state = (self.env.ghost_position, vision)
 
-        # Vérifiez si l'agent touche le fantôme
+        new_position, reward = self.env.move(self.position, action)
+        vision = tuple(sorted(self.env.get_vision(new_position).items()))  # Mettre à jour la vision
+        new_state = (self.env.ghost_position, vision)
+
         if new_position == self.env.ghost_position:
             reward += REWARD_GAME_OVER
             self.score += REWARD_GAME_OVER
-            self.is_game_over = True  # Marquez la partie comme terminée
+            self.is_game_over = True
             return action, reward
 
-        # Mettez à jour la position et récompense
-        self.qtable.set(self.position, action, reward, new_position)
+        # Mettre à jour la Q-table
+        self.qtable.set(current_state, action, reward, new_state)
         self.position = new_position
         self.score += reward
 
@@ -143,7 +146,9 @@ class Agent:
         return action, reward
 
     def best_action(self):
-        return self.qtable.best_action(self.position)
+        vision = tuple(sorted(self.env.get_vision(self.position).items()))
+        state = (self.env.ghost_position, vision)  # Exclure la position de l'agent
+        return self.qtable.best_action(state)
 
     def __repr__(self):
         return f"{self.position} score:{self.score}"
@@ -169,15 +174,52 @@ class Environment:
                 elif rows[i][j] == TILE_GHOST:
                     self.ghost_position = (i, j)  # Initialisation du fantôme
 
-    def move_ghost(self):
-        """Déplace le fantôme dans une direction aléatoire."""
-        action = choice(ACTIONS)
-        move = MOVES[action]
-        new_position = (self.ghost_position[0] + move[0], self.ghost_position[1] + move[1])
+    def get_vision(self, position):
+        vision = {}
+        for action, move in MOVES.items():
+            neighbor = (position[0] + move[0], position[1] + move[1])
+            if neighbor in self.maze:
+                vision[action] = self.maze[neighbor]
+            else:
+                vision[action] = TILE_WALL  # Considérer les cases hors de la grille comme des murs
+        return vision
 
-        # Vérifiez que le fantôme reste dans le labyrinthe et n'entre pas dans des murs ou des voids.
-        if new_position in self.maze and self.maze[new_position] not in [TILE_WALL, TILE_VOID]:
-            self.ghost_position = new_position
+    def move_ghost(self, agent_position):
+        """Déplace le fantôme en direction de l'agent."""
+        ghost_row, ghost_col = self.ghost_position
+        agent_row, agent_col = agent_position  # Utilisez la position de l'agent passée en paramètre
+
+        # Calculez les déplacements possibles
+        possible_moves = []
+        for action, move in MOVES.items():
+            new_position = (ghost_row + move[0], ghost_col + move[1])
+            if new_position in self.maze and self.maze[new_position] != TILE_WALL:
+                possible_moves.append((new_position, action))
+
+        if not possible_moves:
+            return  # Si aucune direction n'est possible, ne bouge pas
+
+        # Choisissez le mouvement qui rapproche le plus le fantôme de l'agent
+        def distance_to_agent(pos):
+            return abs(pos[0] - agent_row) + abs(pos[1] - agent_col)
+
+        # Classez les mouvements par distance à l'agent
+        possible_moves.sort(key=lambda x: distance_to_agent(x[0]))
+
+        # Petite probabilité d'aléatoire pour l'imprévisibilité
+        if len(possible_moves) > 1 and choice([True, False]):  # 50% de chance d'aléatoire
+            _, action = choice(possible_moves)
+        else:
+            _, action = possible_moves[0]  # Choisissez le mouvement optimal
+
+        # Appliquez le déplacement choisi
+        move = MOVES[action]
+        self.ghost_position = (ghost_row + move[0], ghost_col + move[1])
+
+    def reset_ghost(self):
+        """Réinitialise la position du fantôme à sa position initiale."""
+        self.ghost_position = next((pos for pos, tile in self.initial_maze.items() if tile == TILE_GHOST), None)
+
 
     def reset_maze(self):
         """Réinitialise le labyrinthe à son état initial."""
@@ -187,9 +229,7 @@ class Environment:
         move = MOVES[action]
         new_position = (position[0] + move[0], position[1] + move[1])
 
-        if new_position not in self.maze or self.maze[new_position] in [TILE_VOID]:
-            reward = REWARD_OUT
-        elif self.maze[new_position] in [TILE_WALL]:
+        if new_position not in self.maze or self.maze[new_position] == TILE_WALL:
             reward = REWARD_WALL
         elif self.maze[new_position] == '.':
             reward = REWARD_COIN
@@ -277,7 +317,7 @@ class MazeWindow(arcade.Window):
             new_position = self.agent.position
 
             # Déplacez le fantôme
-            self.env.move_ghost()
+            self.env.move_ghost(self.agent.position)
 
             # Mise à jour de la position du joueur
             self.player.center_x, self.player.center_y = \
@@ -297,12 +337,12 @@ class MazeWindow(arcade.Window):
 
             # Vérifiez si le jeu est terminé (collision avec le fantôme)
             if self.agent.is_game_over:
-                print(f"Partie terminée ! Score final : {self.agent.score}")
+                print(f"Partie terminée perdu ! Score final : {self.agent.score}")
                 self.agent.reset()
                 self.reset_sprites()
         else:
             # Partie terminée ou tous les coins collectés
-            print(f"Partie terminée ! Score final : {self.agent.score}")
+            print(f"Partie terminée gagné ! Score final : {self.agent.score}")
             self.agent.reset()
             self.reset_sprites()
 
