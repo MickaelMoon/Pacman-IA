@@ -5,17 +5,16 @@ import pickle
 import matplotlib.pyplot as plt
 
 MAZE = """
-###############
-#o..?#...#...o#
-#.##.#.#.#.##.#
-#.#.........#.#
-#.#.##.#.##.#.#
-#......#......#
-#.#.##.#.##.#.#
-#.#.........#G#
-#.##.#.#.#.##.#
-#o...#...#...o#
-###############
+#############
+#o..?#.#...o#
+#.##.....##.#
+#.#..#.#..#.#
+#.#.##.##.#.#
+#.#.##.##.#.#
+#.#..#.#..#.#
+#.##.....##G#
+#o...#.#...o#
+#############
 """
 
 TILE_WALL = '#'
@@ -23,7 +22,7 @@ TILE_COIN = '.'
 TILE_POWER_PELLET = 'o'
 TILE_GHOST = 'G'
 
-NUMBER_OF_COINS = 78
+NUMBER_OF_COINS = 54
 
 ACTION_UP = 'U'
 ACTION_DOWN = 'D'
@@ -31,12 +30,12 @@ ACTION_LEFT = 'L'
 ACTION_RIGHT = 'R'
 ACTIONS = [ACTION_UP, ACTION_DOWN, ACTION_LEFT, ACTION_RIGHT]
 REWARD_OUT = -50
-REWARD_WALL = -20
-REWARD_COIN = 20
-REWARD_ALL_COINS_COLLECTED = 500
+REWARD_WALL = -30
+REWARD_COIN = 30
+REWARD_ALL_COINS_COLLECTED = 5000
 REWARD_GAME_OVER = -1000  # Malus pour avoir touché un fantôme
 
-REWARD_DEFAULT = -1
+REWARD_DEFAULT = -2
 
 SPRITE_SIZE = 64
 
@@ -51,7 +50,7 @@ def arg_max(table):
 
 
 class QTable:
-    def __init__(self, learning_rate=1, discount_factor=0.8):
+    def __init__(self, learning_rate=0.2, discount_factor=1):
         self.dic = {}
         self.learning_rate = learning_rate
         self.discount_factor = discount_factor
@@ -116,34 +115,49 @@ class Agent:
         if not action:
             action = self.best_action()
 
-        # Ajouter la vision au state (sans inclure la position de l'agent)
-        vision = tuple(sorted(self.env.get_vision(self.position).items()))  # Convertir en tuple trié
-        current_state = (self.env.ghost_position, vision)
+        # Ajouter la vision au state (y compris la position du fantôme)
+        vision = self.env.get_vision(self.position)
+        ghost_in_sight = any(tile == TILE_GHOST for tile in vision.values())  # Détection du fantôme
+        current_state = (ghost_in_sight, tuple(sorted(vision.items())))
 
+        # Obtenez la nouvelle position et la récompense après le déplacement
         new_position, reward = self.env.move(self.position, action)
-        vision = tuple(sorted(self.env.get_vision(new_position).items()))  # Mettre à jour la vision
-        new_state = (self.env.ghost_position, vision)
+        vision = self.env.get_vision(new_position)
+        ghost_in_sight = any(tile == TILE_GHOST for tile in vision.values())
+        new_state = (ghost_in_sight, tuple(sorted(vision.items())))
+
+        # Calcul de la distance entre Pac-Man et le fantôme avant et après
+        prev_distance = abs(self.position[0] - self.env.ghost_position[0]) + abs(
+            self.position[1] - self.env.ghost_position[1])
+        new_distance = abs(new_position[0] - self.env.ghost_position[0]) + abs(
+            new_position[1] - self.env.ghost_position[1])
+
+        # Ajoutez une pénalité si Pac-Man se rapproche du fantôme
+        if new_distance < prev_distance:
+            reward += REWARD_DEFAULT - 5  # Pénalité pour s'approcher
+
 
         if new_position == self.env.ghost_position:
             reward += REWARD_GAME_OVER
-            self.score += REWARD_GAME_OVER
-            self.is_game_over = True
-            return action, reward
+            self.score += reward
+            return action, reward, True  # Partie perdue
 
         # Mettre à jour la Q-table
         self.qtable.set(current_state, action, reward, new_state)
         self.position = new_position
         self.score += reward
 
+        # Si Pac-Man collecte une pièce ou une pastille de puissance
         if self.env.maze[new_position] in (TILE_COIN, TILE_POWER_PELLET):
             self.earned_coins += 1
             self.env.maze[new_position] = ' '
 
-        if self.earned_coins == NUMBER_OF_COINS:
+        game_won = self.earned_coins == NUMBER_OF_COINS
+        if game_won:
             reward += REWARD_ALL_COINS_COLLECTED
-            self.score += REWARD_ALL_COINS_COLLECTED
+            self.score += reward
 
-        return action, reward
+        return action, reward, game_won
 
     def best_action(self):
         vision = tuple(sorted(self.env.get_vision(self.position).items()))
@@ -175,19 +189,24 @@ class Environment:
                     self.ghost_position = (i, j)  # Initialisation du fantôme
 
     def get_vision(self, position):
+        """Retourne les informations des cases adjacentes, y compris la présence du fantôme."""
         vision = {}
         for action, move in MOVES.items():
             neighbor = (position[0] + move[0], position[1] + move[1])
             if neighbor in self.maze:
-                vision[action] = self.maze[neighbor]
+                # Inclure la position du fantôme dans la vision
+                if neighbor == self.ghost_position:
+                    vision[action] = TILE_GHOST
+                else:
+                    vision[action] = self.maze[neighbor]
             else:
-                vision[action] = TILE_WALL  # Considérer les cases hors de la grille comme des murs
+                vision[action] = TILE_WALL  # En dehors du labyrinthe
         return vision
 
     def move_ghost(self, agent_position):
-        """Déplace le fantôme en direction de l'agent."""
+        """Déplace le fantôme en direction de Pac-Man, avec gestion des blocages et une portée de détection."""
         ghost_row, ghost_col = self.ghost_position
-        agent_row, agent_col = agent_position  # Utilisez la position de l'agent passée en paramètre
+        agent_row, agent_col = agent_position  # Position de Pac-Man
 
         # Calculez les déplacements possibles
         possible_moves = []
@@ -199,18 +218,35 @@ class Environment:
         if not possible_moves:
             return  # Si aucune direction n'est possible, ne bouge pas
 
-        # Choisissez le mouvement qui rapproche le plus le fantôme de l'agent
+        # Initialisez la mémoire des positions si elle n'existe pas encore
+        if not hasattr(self, "ghost_memory"):
+            self.ghost_memory = []
+
+        # Ajoutez la position actuelle à la mémoire
+        self.ghost_memory.append(self.ghost_position)
+        if len(self.ghost_memory) > 5:  # Limitez la mémoire à 5 mouvements
+            self.ghost_memory.pop(0)
+
+        # Vérifiez si le fantôme est bloqué dans une boucle (répète des positions)
+        is_in_loop = self.ghost_memory.count(self.ghost_position) > 2
+
+        # Fonction pour calculer la distance entre deux points
         def distance_to_agent(pos):
             return abs(pos[0] - agent_row) + abs(pos[1] - agent_col)
 
-        # Classez les mouvements par distance à l'agent
+        # Classez les mouvements par distance à Pac-Man
         possible_moves.sort(key=lambda x: distance_to_agent(x[0]))
 
-        # Petite probabilité d'aléatoire pour l'imprévisibilité
-        if len(possible_moves) > 1 and choice([True, False]):  # 50% de chance d'aléatoire
-            _, action = choice(possible_moves)
+        # Calcul de la distance actuelle entre le fantôme et Pac-Man
+        current_distance = distance_to_agent(self.ghost_position)
+
+        # Conditions pour un mouvement aléatoire :
+        # 1. Le fantôme est bloqué dans une boucle.
+        # 2. Le fantôme est à une distance >= 2 de Pac-Man.
+        if is_in_loop or current_distance >= 2:
+            _, action = choice(possible_moves)  # Mouvement aléatoire
         else:
-            _, action = possible_moves[0]  # Choisissez le mouvement optimal
+            _, action = possible_moves[0]  # Mouvement optimal vers Pac-Man
 
         # Appliquez le déplacement choisi
         move = MOVES[action]
@@ -296,12 +332,34 @@ class MazeWindow(arcade.Window):
                 self.coins.append(pellet)
                 self.coin_sprites[state] = pellet
 
+    def draw_vision(self):
+        """Dessine la vision de Pac-Man."""
+        # Obtenez les cases visibles autour de Pac-Man
+        vision = self.env.get_vision(self.agent.position)
+
+        for direction, tile in vision.items():
+            # Calculez les coordonnées de la case visible
+            move = MOVES[direction]
+            visible_pos = (self.agent.position[0] + move[0], self.agent.position[1] + move[1])
+
+            # Vérifiez que la position visible est dans les limites de la carte
+            if visible_pos in self.env.maze:
+                x = (visible_pos[1] + 0.5) * SPRITE_SIZE
+                y = (self.env.height - visible_pos[0] - 0.5) * SPRITE_SIZE
+
+                # Dessinez un rectangle semi-transparent sur la case visible
+                arcade.draw_rectangle_filled(x, y, SPRITE_SIZE, SPRITE_SIZE, arcade.color.YELLOW + (100,))
+
     def on_draw(self):
         arcade.start_render()
         self.walls.draw()
         self.coins.draw()
         self.player.draw()
         self.ghost.draw()
+
+        # Dessinez la vision de Pac-Man
+        self.draw_vision()
+
         arcade.draw_text(f'Score: {self.agent.score}, Coins:{self.agent.earned_coins}', 10, 10, arcade.csscolor.WHITE,
                          20)
 
@@ -342,7 +400,7 @@ class MazeWindow(arcade.Window):
                 self.reset_sprites()
         else:
             # Partie terminée ou tous les coins collectés
-            print(f"Partie terminée gagné ! Score final : {self.agent.score}")
+            print(f"Partie terminée GAGNE ! Score final : {self.agent.score}")
             self.agent.reset()
             self.reset_sprites()
 
@@ -366,3 +424,14 @@ if __name__ == "__main__":
     plt.show()
 
     exit(0)
+
+    # for i in range(50):
+    #     agent.reset()
+    #     iteration = 1
+    #     while agent.position != env.goal and iteration < 1000:
+    #         # print(f"#{iteration} {agent.position}")
+    #         action, reward = agent.do()
+    #         # print(f"{action} -> {agent.position} {reward}$")
+    #         iteration += 1
+    #     print(iteration)
+    # print(agent.qtable)
