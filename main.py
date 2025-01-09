@@ -29,22 +29,26 @@ ACTION_DOWN = 'D'
 ACTION_LEFT = 'L'
 ACTION_RIGHT = 'R'
 ACTIONS = [ACTION_UP, ACTION_DOWN, ACTION_LEFT, ACTION_RIGHT]
+
 REWARD_OUT = -100
-REWARD_WALL = -100
+REWARD_WALL = -300
+REWARD_REPEAT = 0          # <-- NOUVEAU malus quand on revisite une case
 REWARD_WIN = 1000
 REWARD_PELLET = 10
 REWARD_DEFAULT = -1
-REWARD_GHOST = -1000
+REWARD_GHOST = -10000
 
 WIN = 1
 LOOSE = 0
 
 SPRITE_SIZE = 64
 
-MOVES = {ACTION_UP: (-1, 0),
-         ACTION_DOWN: (1, 0),
-         ACTION_LEFT: (0, -1),
-         ACTION_RIGHT: (0, 1)}
+MOVES = {
+    ACTION_UP: (-1, 0),
+    ACTION_DOWN: (1, 0),
+    ACTION_LEFT: (0, -1),
+    ACTION_RIGHT: (0, 1)
+}
 
 
 def arg_max(table):
@@ -52,23 +56,23 @@ def arg_max(table):
 
 
 class QTable:
-    def __init__(self, learning_rate=0.7, discount_factor=0.95):
+    def __init__(self, learning_rate=0.9, discount_factor=0.5):
         self.dic = {}
         self.learning_rate = learning_rate
         self.discount_factor = discount_factor
 
     def set(self, state, action, reward, new_state):
-        """Met à jour la Q-table en fonction des états (vision) et des actions."""
-        # Si l'état ou le nouvel état n'est pas déjà dans la table, initialisez-les
         if state not in self.dic:
-            self.dic[state] = {ACTION_UP: 0, ACTION_DOWN: 0, ACTION_LEFT: 0, ACTION_RIGHT: 0}
+            self.dic[state] = {a: 0 for a in ACTIONS}
         if new_state not in self.dic:
-            self.dic[new_state] = {ACTION_UP: 0, ACTION_DOWN: 0, ACTION_LEFT: 0, ACTION_RIGHT: 0}
+            self.dic[new_state] = {a: 0 for a in ACTIONS}
 
-        # Calcul du delta et mise à jour
-        delta = reward + self.discount_factor * max(self.dic[new_state].values()) - self.dic[state][action]
+        delta = (
+            reward
+            + self.discount_factor * max(self.dic[new_state].values())
+            - self.dic[state][action]
+        )
         self.dic[state][action] += self.learning_rate * delta
-        # Q(s, a) = Q(s, a) + alpha * [reward + gamma * max(S', a) - Q(s, a)]
 
     def best_action(self, position):
         if position in self.dic:
@@ -80,12 +84,12 @@ class QTable:
         res = ' ' * 11
         for action in ACTIONS:
             res += f'{action:5s}'
-        res += '\r\n'
+        res += '\n'
         for state in self.dic:
             res += str(state) + " "
             for action in self.dic[state]:
-                res += f"{self.dic[state][action]:5d}"
-            res += '\r\n'
+                res += f"{self.dic[state][action]:5.1f}"
+            res += '\n'
         return res
 
 
@@ -94,17 +98,15 @@ class Agent:
         self.env = env
         self.history = []
         self.score = None
-        self.collected_pellets = 0
-        self.reset()
         self.qtable = QTable()
         self.exploration = 0
+        self.reset()
 
     def reset(self):
-        if self.score:
+        if self.score is not None:
             self.history.append(self.score)
-        self.position = self.env.start  # Utilise la position définie
+        self.position = self.env.start
         self.score = 0
-        self.collected_pellets = 0
         self.env.reset_maze()
 
     def shake(self, exploration=1.0):
@@ -119,43 +121,42 @@ class Agent:
             self.qtable.dic, self.history = pickle.load(file)
 
     def do(self, action=None):
-        # Obtenir la vision actuelle (état)
+        # État (vision)
         current_vision = self.env.get_vision(self.position)
         current_state = tuple(tuple(row) for row in current_vision)
 
-        # Choisir l'action
-        if not action:
+        # Choix de l'action
+        if action is None:
             action = self.best_action()
-
-        # Effectuer l'action
+        
+        # Action -> nouvel état
         new_position, reward = self.env.move(self.position, action)
 
-        # Obtenir la nouvelle vision (nouvel état)
+        # Nouvelle vision
         new_vision = self.env.get_vision(new_position)
         new_state = tuple(tuple(row) for row in new_vision)
 
-        # Mettre à jour la Q-table
+        # Mise à jour de la Q-table
         self.qtable.set(current_state, action, reward, new_state)
 
-        # Mettre à jour la position et le score
+        # Mise à jour de l'agent
         self.position = new_position
         self.score += reward
-
+        print("action, reward =", action, reward)
         return action, reward
 
     def best_action(self):
-        """Choisit la meilleure action en fonction de l'état (basé sur la vision)."""
-        vision = self.env.get_vision(self.position)  # Récupérer la vision actuelle
-        vision_state = tuple(tuple(row) for row in vision)  # Convertir la vision en un état immuable (tuple de tuples)
+        vision = self.env.get_vision(self.position)
+        vision_state = tuple(tuple(row) for row in vision)
 
-        if random() < self.exploration:
-            self.exploration *= 0.999
-            return choice(ACTIONS)
-        else:
-            return self.qtable.best_action(vision_state)
+        # Ici, tu as désactivé l'exploration. L'agent prend toujours la meilleure action connue.
+        # (On laisse self.exploration à 0, ou on la met à un autre usage ?)
+        # S'il n'y a pas de table connue, on fait un choix aléatoire.
+        return self.qtable.best_action(vision_state)
 
     def __repr__(self):
-        return f"{self.position} score:{self.score} exploration:{self.exploration}"
+        return f"{self.position} score:{self.score:.1f} exploration:{self.exploration}"
+
 
 class PelletManager:
     def __init__(self, maze):
@@ -163,19 +164,17 @@ class PelletManager:
         self.reset_pellets()
 
     def reset_pellets(self):
-        """Initialise ou réinitialise la liste des pellets à collecter."""
         self.pellets = {
-            position for position, tile in self.original_maze.items()
+            position
+            for position, tile in self.original_maze.items()
             if tile in [TILE_PELLET, TILE_POWER_PELLET]
         }
 
     def collect_pellet(self, position):
-        """Supprime un pellet de la liste si collecté."""
         if position in self.pellets:
             self.pellets.remove(position)
 
     def are_all_pellets_collected(self):
-        """Vérifie si tous les pellets ont été collectés."""
         return len(self.pellets) == 0
 
 
@@ -189,6 +188,10 @@ class Environment:
         self.start = start
         self.ghost_start = ghost_start
         self.ghost_position = ghost_start
+
+        # Ensemble des cases déjà visitées (pour le malus "repeat")
+        self.visited_positions = set()
+
         for i in range(len(rows)):
             for j in range(len(rows[i])):
                 self.maze[(i, j)] = rows[i][j]
@@ -198,15 +201,14 @@ class Environment:
         for i in range(len(rows)):
             for j in range(len(rows[i])):
                 self.maze[(i, j)] = rows[i][j]
+
         self.pellet_manager.reset_pellets()
         self.ghost_position = self.ghost_start
 
-    import collections
+        # Réinitialise l'historique des positions visitées
+        self.visited_positions = set()
 
     def move_ghost(self, pacman_position):
-        def manhattan_distance(pos1, pos2):
-            return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
-
         def bfs(start, goal):
             queue = collections.deque([[start]])
             seen = set([start])
@@ -217,7 +219,9 @@ class Environment:
                     return path
                 for move in MOVES.values():
                     next_pos = (x + move[0], y + move[1])
-                    if next_pos in self.maze and self.maze[next_pos] != TILE_WALL and next_pos not in seen:
+                    if (next_pos in self.maze
+                            and self.maze[next_pos] != TILE_WALL
+                            and next_pos not in seen):
                         queue.append(path + [next_pos])
                         seen.add(next_pos)
             return []
@@ -227,53 +231,62 @@ class Environment:
             self.ghost_position = path[1]
 
     def are_all_pellets_collected(self):
-        return all(tile not in [TILE_PELLET, TILE_POWER_PELLET] for tile in self.maze.values())
+        return all(tile not in [TILE_PELLET, TILE_POWER_PELLET]
+                   for tile in self.maze.values())
 
     def move(self, position, action):
         move = MOVES[action]
         new_position = (position[0] + move[0], position[1] + move[1])
 
-        # Debug
-        # print(f"Agent moving from {position} to {new_position}")
-        # print(f"Ghost is at {self.ghost_position}")
+        reward = 0
 
+        # Vérifier la validité du déplacement
         if new_position not in self.maze:
-            reward = REWARD_OUT
-        elif self.maze[new_position] in [TILE_WALL]:
-            reward = REWARD_WALL
+            reward += REWARD_OUT
+        elif self.maze[new_position] == TILE_WALL:
+            reward += REWARD_WALL
         elif self.maze[new_position] in [TILE_PELLET, TILE_POWER_PELLET]:
-            reward = REWARD_PELLET
+            reward += REWARD_PELLET
             position = new_position
-            self.maze[new_position] = ' '
+            self.maze[new_position] = ' '  # On enlève le pellet du labyrinthe
             self.pellet_manager.collect_pellet(position)
+
+            # Si tous les pellets sont mangés, on ajoute la récompense de victoire
             if self.pellet_manager.are_all_pellets_collected():
                 reward += REWARD_WIN
         elif new_position == self.ghost_position:
-            print(f"Collision detected: Agent at {new_position}, Ghost at {self.ghost_position}")
-            reward = REWARD_GHOST
-            position = self.start  # Reset agent's position
+            # Collision fantôme
+            # print(f"Collision detected: Agent at {new_position}, Ghost at {self.ghost_position}")
+            reward += REWARD_GHOST
+            position = self.start
         else:
-            reward = REWARD_DEFAULT
+            # Mouvement normal
             position = new_position
+
+        # Vérifier si c'est une case déjà visitée (et non la case de départ forcé après un reset)
+        if position in self.visited_positions:
+            reward += REWARD_REPEAT  # Malus pour revisiter
+        else:
+            self.visited_positions.add(position)
+            
+        reward += REWARD_DEFAULT
 
         return position, reward
 
-    def get_vision(self, position, vision_size=3):
-        """
-        Retourne une vision locale autour de l'agent.
-        vision_size : La taille de la fenêtre carrée (3x3, 5x5, etc.).
-        """
+    def get_vision(self, position, vision_size=5):
         radius = vision_size // 2
         vision = []
-
         for i in range(-radius, radius + 1):
             row = []
             for j in range(-radius, radius + 1):
                 pos = (position[0] + i, position[1] + j)
-                row.append(self.maze.get(pos, 'x'))  # 'x' par défaut pour les limites du labyrinthe
+                if pos == self.ghost_position:
+                    row.append('G')
+                else:
+                    row.append(self.maze.get(pos, 'x'))
             vision.append(row)
-
         return vision
+
 
 class MazeWindow(arcade.Window):
     def __init__(self, agent):
@@ -281,27 +294,30 @@ class MazeWindow(arcade.Window):
         self.agent = agent
         self.env = agent.env
         arcade.set_background_color(arcade.color.BLACK)
+        self.set_update_rate(1 / 1500)
 
     def setup(self):
         self.walls = arcade.SpriteList()
         self.pellets = arcade.SpriteList()
+
         for state in env.maze:
-            if env.maze[state] is TILE_WALL: # Walls
+            if env.maze[state] == TILE_WALL:
                 sprite = self.create_sprite('assets/wall.png', state)
                 self.walls.append(sprite)
-            elif env.maze[state] is TILE_PELLET: # Pellets
+            elif env.maze[state] == TILE_PELLET:
                 sprite = self.create_sprite('assets/pellet.png', state)
                 self.pellets.append(sprite)
-            elif env.maze[state] is TILE_POWER_PELLET: # Power Pellets
+            elif env.maze[state] == TILE_POWER_PELLET:
                 sprite = self.create_sprite('assets/power_pellet.png', state)
                 self.pellets.append(sprite)
 
-        self.player = self.create_sprite('assets/pacman.png', agent.position)
+        self.player = self.create_sprite('assets/pacman.png', self.agent.position)
         self.ghost = self.create_sprite('assets/ghost.png', self.env.ghost_position)
 
     def create_sprite(self, resource, state):
         sprite = arcade.Sprite(resource, 0.5)
-        sprite.center_x, sprite.center_y = (state[1] + 0.5) * SPRITE_SIZE, (env.height - state[0] - 0.5) * SPRITE_SIZE
+        sprite.center_x = (state[1] + 0.5) * SPRITE_SIZE
+        sprite.center_y = (env.height - state[0] - 0.5) * SPRITE_SIZE
         return sprite
 
     def on_draw(self):
@@ -315,29 +331,33 @@ class MazeWindow(arcade.Window):
     def on_update(self, delta_time):
         if not self.env.pellet_manager.are_all_pellets_collected():
             self.agent.do()
-            self.player.center_x, self.player.center_y = \
-                (self.agent.position[1] + 0.5) * SPRITE_SIZE, \
-                (env.height - self.agent.position[0] - 0.5) * SPRITE_SIZE
 
+            # Mise à jour position graphique du pacman
+            self.player.center_x = (self.agent.position[1] + 0.5) * SPRITE_SIZE
+            self.player.center_y = (env.height - self.agent.position[0] - 0.5) * SPRITE_SIZE
+
+            # Supprimer les sprites de pellets mangés
             for pellet in self.pellets:
-                if (pellet.center_x, pellet.center_y) == \
-                        ((self.agent.position[1] + 0.5) * SPRITE_SIZE,
-                         (env.height - self.agent.position[0] - 0.5) * SPRITE_SIZE):
+                if (pellet.center_x, pellet.center_y) == (
+                    (self.agent.position[1] + 0.5) * SPRITE_SIZE,
+                    (env.height - self.agent.position[0] - 0.5) * SPRITE_SIZE
+                ):
                     self.pellets.remove(pellet)
                     break
 
+            # Déplacement du fantôme
             self.env.move_ghost(self.agent.position)
-            self.ghost.center_x, self.ghost.center_y = \
-                (self.env.ghost_position[1] + 0.5) * SPRITE_SIZE, \
-                (env.height - self.env.ghost_position[0] - 0.5) * SPRITE_SIZE
+            self.ghost.center_x = (self.env.ghost_position[1] + 0.5) * SPRITE_SIZE
+            self.ghost.center_y = (env.height - self.env.ghost_position[0] - 0.5) * SPRITE_SIZE
 
+            # Si collision fantôme
             if self.agent.position == self.env.ghost_position:
-                print("Collision avec un fantôme ! Partie perdue.")
+                self.agent.score += REWARD_GHOST
+                print("Score final:", self.agent.score)
                 self.agent.reset()
                 self.setup()
         else:
-            # Tous les pellets sont collectés
-            print("Tous les pellets ont été collectés !")
+            # print("Tous les pellets ont été collectés !")
             self.agent.reset()
             self.setup()
 
@@ -351,12 +371,12 @@ class MazeWindow(arcade.Window):
 
 if __name__ == "__main__":
     env = Environment(MAZE, start=(1, 1))
-    print(env.start)
+    # print("Point de départ:", env.start)
 
     agent = Agent(env)
     if os.path.exists(FILE_AGENT):
         agent.load(FILE_AGENT)
-    print(agent)
+    # print(agent)
 
     window = MazeWindow(agent)
     window.setup()
@@ -365,17 +385,9 @@ if __name__ == "__main__":
     agent.save(FILE_AGENT)
 
     plt.plot(agent.history)
+    plt.title("Score history")
+    plt.xlabel("Episodes")
+    plt.ylabel("Score")
     plt.show()
 
     exit(0)
-    # print(env.goal)
-    # for i in range(50):
-    #     agent.reset()
-    #     iteration = 1
-    #     while agent.position != env.goal and iteration < 1000:
-    #         # print(f"#{iteration} {agent.position}")
-    #         action, reward = agent.do()
-    #         # print(f"{action} -> {agent.position} {reward}$")
-    #         iteration += 1
-    #     print(iteration)
-    # print(agent.qtable)
