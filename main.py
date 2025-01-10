@@ -31,12 +31,12 @@ ACTION_RIGHT = 'R'
 ACTIONS = [ACTION_UP, ACTION_DOWN, ACTION_LEFT, ACTION_RIGHT]
 
 REWARD_OUT = -100
-REWARD_WALL = -300
+REWARD_WALL = -100
 REWARD_REPEAT = 0          # <-- NOUVEAU malus quand on revisite une case
 REWARD_WIN = 1000
 REWARD_PELLET = 10
 REWARD_DEFAULT = -1
-REWARD_GHOST = -10000
+REWARD_GHOST = -1000
 
 WIN = 1
 LOOSE = 0
@@ -121,38 +121,44 @@ class Agent:
             self.qtable.dic, self.history = pickle.load(file)
 
     def do(self, action=None):
-        # État (vision)
-        current_vision = self.env.get_vision(self.position)
-        current_state = tuple(tuple(row) for row in current_vision)
-
         # Choix de l'action
         if action is None:
             action = self.best_action()
-        
+
+        # État (vision)
+        current_vision = self.env.get_vision(self.position)
+        current_state = tuple(tuple(row) for row in current_vision), self.env.closest_pellet(self.position), self.env.distance_to_ghost(self.position)
+
         # Action -> nouvel état
         new_position, reward = self.env.move(self.position, action)
 
+        self.position = new_position
+        self.score += reward
+
         # Nouvelle vision
         new_vision = self.env.get_vision(new_position)
-        new_state = tuple(tuple(row) for row in new_vision)
+        new_state = tuple(tuple(row) for row in new_vision) , self.env.closest_pellet(self.position) , self.env.distance_to_ghost(self.position)
+
+        #print(new_state)
+        print("Current state: ",current_state," new state: ", new_state)
+        print("A",action," R ", reward)
 
         # Mise à jour de la Q-table
         self.qtable.set(current_state, action, reward, new_state)
 
         # Mise à jour de l'agent
-        self.position = new_position
-        self.score += reward
-        print("action, reward =", action, reward)
+
+        #print("action, reward =", action, reward)
         return action, reward
 
     def best_action(self):
-        vision = self.env.get_vision(self.position)
-        vision_state = tuple(tuple(row) for row in vision)
-
-        # Ici, tu as désactivé l'exploration. L'agent prend toujours la meilleure action connue.
-        # (On laisse self.exploration à 0, ou on la met à un autre usage ?)
-        # S'il n'y a pas de table connue, on fait un choix aléatoire.
-        return self.qtable.best_action(vision_state)
+        vision = tuple(tuple(row) for row in self.env.get_vision(self.position))
+        #print("vision =", vision)
+        if random() < self.exploration:
+            self.exploration *= 0.999
+            return choice(ACTIONS)
+        else:
+            return self.qtable.best_action(vision)
 
     def __repr__(self):
         return f"{self.position} score:{self.score:.1f} exploration:{self.exploration}"
@@ -196,6 +202,45 @@ class Environment:
             for j in range(len(rows[i])):
                 self.maze[(i, j)] = rows[i][j]
 
+    def distance_to_ghost(self, position):
+        ghost_position = self.ghost_position
+        vertical_distance = ghost_position[0] - position[0]
+        horizontal_distance = ghost_position[1] - position[1]
+
+        distances = [0, 0, 0, 0]  # [haut, droite, bas, gauche]
+
+        if vertical_distance < 0:  # Ghost en haut
+            distances[0] = abs(vertical_distance)
+        elif vertical_distance > 0:  # Ghost en bas
+            distances[2] = abs(vertical_distance)
+
+        if horizontal_distance > 0:  # Ghost à droite
+            distances[1] = abs(horizontal_distance)
+        elif horizontal_distance < 0:  # Ghost à gauche
+            distances[3] = abs(horizontal_distance)
+
+        return tuple(distances)
+
+    def closest_pellet(self, position):
+        min_distances = [float('inf')] * 4  # [haut, droite, bas, gauche]
+        for pellet in self.pellet_manager.pellets:
+            vertical_distance = pellet[0] - position[0]
+            horizontal_distance = pellet[1] - position[1]
+
+            if vertical_distance < 0:  # Pellet en haut
+                min_distances[0] = min(min_distances[0], abs(vertical_distance))
+            elif vertical_distance > 0:  # Pellet en bas
+                min_distances[2] = min(min_distances[2], abs(vertical_distance))
+
+            if horizontal_distance > 0:  # Pellet à droite
+                min_distances[1] = min(min_distances[1], abs(horizontal_distance))
+            elif horizontal_distance < 0:  # Pellet à gauche
+                min_distances[3] = min(min_distances[3], abs(horizontal_distance))
+
+        # Remplacer les infinis par 0 si aucun pellet n'est trouvé dans cette direction
+        min_distances = [0 if dist == float('inf') else dist for dist in min_distances]
+        return tuple(min_distances)
+
     def reset_maze(self):
         rows = MAZE.strip().split('\n')
         for i in range(len(rows)):
@@ -204,6 +249,7 @@ class Environment:
 
         self.pellet_manager.reset_pellets()
         self.ghost_position = self.ghost_start
+        self.position = self.start
 
         # Réinitialise l'historique des positions visitées
         self.visited_positions = set()
@@ -245,6 +291,11 @@ class Environment:
             reward += REWARD_OUT
         elif self.maze[new_position] == TILE_WALL:
             reward += REWARD_WALL
+        elif new_position == self.ghost_position:
+            # Collision fantôme
+            # print(f"Collision detected: Agent at {new_position}, Ghost at {self.ghost_position}")
+            reward += REWARD_GHOST
+            position = new_position
         elif self.maze[new_position] in [TILE_PELLET, TILE_POWER_PELLET]:
             reward += REWARD_PELLET
             position = new_position
@@ -254,26 +305,21 @@ class Environment:
             # Si tous les pellets sont mangés, on ajoute la récompense de victoire
             if self.pellet_manager.are_all_pellets_collected():
                 reward += REWARD_WIN
-        elif new_position == self.ghost_position:
-            # Collision fantôme
-            # print(f"Collision detected: Agent at {new_position}, Ghost at {self.ghost_position}")
-            reward += REWARD_GHOST
-            position = self.start
+                position = new_position
         else:
             # Mouvement normal
+            reward += REWARD_DEFAULT
             position = new_position
 
-        # Vérifier si c'est une case déjà visitée (et non la case de départ forcé après un reset)
-        if position in self.visited_positions:
-            reward += REWARD_REPEAT  # Malus pour revisiter
-        else:
-            self.visited_positions.add(position)
-            
-        reward += REWARD_DEFAULT
+        # # Vérifier si c'est une case déjà visitée (et non la case de départ forcé après un reset)
+        # if position in self.visited_positions:
+        #     reward += REWARD_REPEAT  # Malus pour revisiter
+        # else:
+        #     self.visited_positions.add(position)
 
         return position, reward
 
-    def get_vision(self, position, vision_size=5):
+    def get_vision(self, position, vision_size=3):
         radius = vision_size // 2
         vision = []
         for i in range(-radius, radius + 1):
@@ -294,7 +340,7 @@ class MazeWindow(arcade.Window):
         self.agent = agent
         self.env = agent.env
         arcade.set_background_color(arcade.color.BLACK)
-        self.set_update_rate(1 / 1500)
+        self.set_update_rate(1 / 1200)
 
     def setup(self):
         self.walls = arcade.SpriteList()
@@ -329,12 +375,8 @@ class MazeWindow(arcade.Window):
         arcade.draw_text(f'{self.agent}', 10, 10, arcade.csscolor.WHITE, 20)
 
     def on_update(self, delta_time):
-        if not self.env.pellet_manager.are_all_pellets_collected():
+        if not self.env.pellet_manager.are_all_pellets_collected() and self.agent.position != self.env.ghost_position:
             self.agent.do()
-
-            # Mise à jour position graphique du pacman
-            self.player.center_x = (self.agent.position[1] + 0.5) * SPRITE_SIZE
-            self.player.center_y = (env.height - self.agent.position[0] - 0.5) * SPRITE_SIZE
 
             # Supprimer les sprites de pellets mangés
             for pellet in self.pellets:
@@ -345,17 +387,14 @@ class MazeWindow(arcade.Window):
                     self.pellets.remove(pellet)
                     break
 
+            # Mise à jour position graphique du pacman
+            self.player.center_x = (self.agent.position[1] + 0.5) * SPRITE_SIZE
+            self.player.center_y = (env.height - self.agent.position[0] - 0.5) * SPRITE_SIZE
+
             # Déplacement du fantôme
             self.env.move_ghost(self.agent.position)
             self.ghost.center_x = (self.env.ghost_position[1] + 0.5) * SPRITE_SIZE
             self.ghost.center_y = (env.height - self.env.ghost_position[0] - 0.5) * SPRITE_SIZE
-
-            # Si collision fantôme
-            if self.agent.position == self.env.ghost_position:
-                self.agent.score += REWARD_GHOST
-                print("Score final:", self.agent.score)
-                self.agent.reset()
-                self.setup()
         else:
             # print("Tous les pellets ont été collectés !")
             self.agent.reset()
