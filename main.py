@@ -16,6 +16,9 @@ x.xx.xx.x
 x.x...x.x
 x.x.x.x.x
 x.x.x.x.x
+x.x.x.x.x
+x.x.x.x.x
+x.x.x.x.x
 x.x...x.x
 x.xx.xx.x
 xo.....ox
@@ -48,7 +51,7 @@ MOVES = {
 REWARD_OUT = -100        # Sortie du labyrinthe
 REWARD_WALL = -100       # Collision mur
 REWARD_REPEAT = -5       # Malus pour revisiter la même case
-REWARD_WIN = 1000        # Récompense de victoire (tous les pellets)
+REWARD_WIN = 10000        # Récompense de victoire (tous les pellets)
 REWARD_PELLET = 10       # Ramasser un pellet
 REWARD_DEFAULT = -3      # Mouvement "normal"
 REWARD_GHOST = -1000     # Collision avec le fantôme
@@ -119,7 +122,7 @@ class Agent:
         self.env = env
         self.history = []
         self.score = None
-        self.qtable = QTable(learning_rate=0.9, discount_factor=0.9)
+        self.qtable = QTable(learning_rate=0.9, discount_factor=0.8)
         self.exploration = exploration
         self.exploration_decay = exploration_decay
         self.reset()
@@ -360,6 +363,7 @@ class Environment:
         else:
             self.visited_positions.add(position)
 
+        #print(f"Action: {action}, Position: {position}, Reward: {reward}")
         return position, reward
 
     def get_vision(self, position, vision_size=3):
@@ -387,7 +391,7 @@ class MazeWindow(arcade.Window):
         self.env = agent.env
         arcade.set_background_color(arcade.color.BLACK)
         # Rapidité du jeu
-        self.set_update_rate(1 / 12)
+        self.set_update_rate(1 / 1200)
 
     def setup(self):
         self.walls = arcade.SpriteList()
@@ -466,8 +470,8 @@ class MazeWindow(arcade.Window):
 ###############################################################################
 
 if __name__ == "__main__":
-    env = Environment(MAZE, start=(1, 1), ghost_start=(7, 7))
-    agent = Agent(env, exploration=0.0, exploration_decay=0.999)
+    env = Environment(MAZE, start=(1, 1), ghost_start=(10, 7))
+    agent = Agent(env, exploration=1.0, exploration_decay=0.999)
 
     # Charger éventuellement une Q-table
     if os.path.exists(FILE_AGENT):
