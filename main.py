@@ -46,13 +46,13 @@ MOVES = {
 }
 
 # Récompenses
-REWARD_OUT     = -100       # Sortie du labyrinthe
-REWARD_WALL    = -100       # Collision avec un mur
-REWARD_REPEAT  = -1         # Malus pour revisiter une case
-REWARD_WIN     = 10000      # Récompense de victoire (tous les pellets ramassés)
-REWARD_PELLET  = 50         # Ramasser un pellet
+REWARD_OUT     = -200       # Sortie du labyrinthe
+REWARD_WALL    = -200       # Collision avec un mur
+REWARD_REPEAT  = -5         # Malus pour revisiter une case
+REWARD_WIN     = 50000      # Récompense de victoire (tous les pellets ramassés)
+REWARD_PELLET  = 1000       # Ramasser un pellet (increased reward)
 REWARD_DEFAULT = -1         # Mouvement "normal" (adoucit pour un labyrinthe plus vaste)
-REWARD_GHOST   = -10000     # Collision avec le fantôme
+REWARD_GHOST   = -20000     # Collision avec le fantôme
 
 WIN = 1
 LOOSE = 0
@@ -73,7 +73,7 @@ def arg_max(table):
 ###############################################################################
 
 class QTable:
-    def __init__(self, learning_rate=0.1, discount_factor=0.9):
+    def __init__(self, learning_rate=0.2, discount_factor=0.95):
         self.dic = {}
         self.learning_rate = learning_rate
         self.discount_factor = discount_factor
@@ -112,13 +112,14 @@ class QTable:
 ###############################################################################
 
 class Agent:
-    def __init__(self, env, exploration=1.0, exploration_decay=0.995):
+    def __init__(self, env, exploration=1.0, exploration_decay=0.99995):
         self.env = env
         self.history = []
         self.score = None
-        self.qtable = QTable(learning_rate=0.1, discount_factor=0.9)
+        self.qtable = QTable(learning_rate=0.2, discount_factor=0.95)
         self.exploration = exploration
         self.exploration_decay = exploration_decay
+        self.last_action = None
         self.reset()
 
     def reset(self):
@@ -149,21 +150,22 @@ class Agent:
         current_state = (
             tuple(tuple(row) for row in current_vision),
             self.env.closest_pellet(self.position),
-            self.env.distance_to_ghost(self.position)
+            self.env.distance_to_ghosts(self.position)
         )
         if action is None:
             action = self.best_action()
+        self.last_action = action
         # Déplacement de Pac-Man
         new_position, reward = self.env.move(self.position, action)
         self.position = new_position
         self.score += reward
-        # Déplacement du fantôme (pour que le nouvel état soit à jour)
-        self.env.move_ghost(self.position)
+        # Déplacement des fantômes (pour que le nouvel état soit à jour)
+        self.env.move_ghosts(self.position, self.last_action)
         new_vision = self.env.get_vision(self.position, vision_size=5)
         new_state = (
             tuple(tuple(row) for row in new_vision),
             self.env.closest_pellet(self.position),
-            self.env.distance_to_ghost(self.position)
+            self.env.distance_to_ghosts(self.position)
         )
         self.qtable.set(current_state, action, reward, new_state)
         return action, reward
@@ -173,7 +175,7 @@ class Agent:
         current_state = (
             tuple(tuple(row) for row in current_vision),
             self.env.closest_pellet(self.position),
-            self.env.distance_to_ghost(self.position)
+            self.env.distance_to_ghosts(self.position)
         )
         if random() < self.exploration:
             self.exploration *= self.exploration_decay
@@ -211,58 +213,39 @@ class PelletManager:
 ###############################################################################
 
 class Environment:
-    def __init__(self, text, start=(1, 1), ghost_start=(9, 7)):
+    def __init__(self, text, start=(1, 1), ghost_starts=[(9, 7), (1, 9)]):
         rows = text.strip().split('\n')
         self.height = len(rows)
         self.width = len(rows[0])
         self.maze = {}
         self.start = start
-        self.ghost_start = ghost_start
-        self.ghost_position = ghost_start
+        self.ghost_starts = ghost_starts
+        self.ghost_positions = list(ghost_starts)
         self.visited_positions = set()
         for i in range(self.height):
             for j in range(self.width):
                 self.maze[(i, j)] = rows[i][j]
         self.pellet_manager = PelletManager(self.maze)
 
-    def distance_to_ghost(self, position):
+    def distance_to_ghosts(self, position):
         """
         Retourne un tuple (haut, droite, bas, gauche) indiquant
-        la distance du fantôme à Pac-Man.
+        la distance des fantômes à Pac-Man.
         """
-        ghost = self.ghost_position
-        vertical_distance = ghost[0] - position[0]
-        horizontal_distance = ghost[1] - position[1]
-        distances = [0, 0, 0, 0] 
-        if vertical_distance < 0:
-            distances[0] = abs(vertical_distance)
-        elif vertical_distance > 0:
-            distances[2] = abs(vertical_distance)
-        if horizontal_distance > 0:
-            distances[1] = abs(horizontal_distance)
-        elif horizontal_distance < 0:
-            distances[3] = abs(horizontal_distance)
-        return tuple(distances)
-
-    def closest_pellet(self, position):
-        """
-        Retourne, pour chaque direction (haut, droite, bas, gauche),
-        la distance minimale jusqu'à un pellet.
-        """
-        min_distances = [float('inf')] * 4
-        for pellet in self.pellet_manager.pellets:
-            vertical_distance = pellet[0] - position[0]
-            horizontal_distance = pellet[1] - position[1]
+        distances = [float('inf')] * 4
+        for ghost in self.ghost_positions:
+            vertical_distance = ghost[0] - position[0]
+            horizontal_distance = ghost[1] - position[1]
             if vertical_distance < 0:
-                min_distances[0] = min(min_distances[0], abs(vertical_distance))
+                distances[0] = min(distances[0], abs(vertical_distance))
             elif vertical_distance > 0:
-                min_distances[2] = min(min_distances[2], abs(vertical_distance))
+                distances[2] = min(distances[2], abs(vertical_distance))
             if horizontal_distance > 0:
-                min_distances[1] = min(min_distances[1], abs(horizontal_distance))
+                distances[1] = min(distances[1], abs(horizontal_distance))
             elif horizontal_distance < 0:
-                min_distances[3] = min(min_distances[3], abs(horizontal_distance))
-        min_distances = [0 if d == float('inf') else d for d in min_distances]
-        return tuple(min_distances)
+                distances[3] = min(distances[3], abs(horizontal_distance))
+        distances = [0 if d == float('inf') else d for d in distances]
+        return tuple(distances)
 
     def reset_maze(self):
         rows = MAZE.strip().split('\n')
@@ -270,12 +253,12 @@ class Environment:
             for j in range(self.width):
                 self.maze[(i, j)] = rows[i][j]
         self.pellet_manager.reset_pellets()
-        self.ghost_position = self.ghost_start
+        self.ghost_positions = list(self.ghost_starts)
         self.visited_positions = set()
 
-    def move_ghost(self, pacman_position):
+    def move_ghosts(self, pacman_position, pacman_last_action):
         """
-        Déplace le fantôme vers Pac-Man en utilisant une recherche en largeur (BFS).
+        Déplace les fantômes vers Pac-Man en utilisant différentes stratégies.
         """
         def bfs(start, goal):
             queue = collections.deque([[start]])
@@ -291,9 +274,21 @@ class Environment:
                         queue.append(path + [(nx, ny)])
                         seen.add((nx, ny))
             return []
-        path = bfs(self.ghost_position, pacman_position)
+
+        # Blinky (Red Ghost) - Directly targets Pac-Man's current position
+        path = bfs(self.ghost_positions[0], pacman_position)
         if len(path) > 1:
-            self.ghost_position = path[1]
+            self.ghost_positions[0] = path[1]
+
+        # Inky (Cyan Ghost) - Uses both Blinky's position and Pac-Man's position
+        blinky_position = self.ghost_positions[0]
+        pacman_direction = MOVES[pacman_last_action]
+        vector = (pacman_position[0] + 2 * pacman_direction[0] - blinky_position[0],
+                  pacman_position[1] + 2 * pacman_direction[1] - blinky_position[1])
+        target_position = (blinky_position[0] + vector[0], blinky_position[1] + vector[1])
+        path = bfs(self.ghost_positions[1], target_position)
+        if len(path) > 1:
+            self.ghost_positions[1] = path[1]
 
     def move(self, position, action):
         """
@@ -308,7 +303,7 @@ class Environment:
             reward += REWARD_OUT
         elif self.maze[new_position] == TILE_WALL:
             reward += REWARD_WALL
-        elif new_position == self.ghost_position:
+        elif new_position in self.ghost_positions:
             reward += REWARD_GHOST
             position = new_position
         elif self.maze[new_position] in [TILE_PELLET, TILE_POWER_PELLET]:
@@ -329,7 +324,27 @@ class Environment:
             self.visited_positions.add(position)
 
         return position, reward
-
+    
+    def closest_pellet(self, position):
+        """
+        Retourne, pour chaque direction (haut, droite, bas, gauche),
+        la distance minimale jusqu'à un pellet.
+        """
+        min_distances = [float('inf')] * 4
+        for pellet in self.pellet_manager.pellets:
+            vertical_distance = pellet[0] - position[0]
+            horizontal_distance = pellet[1] - position[1]
+            if vertical_distance < 0:
+                min_distances[0] = min(min_distances[0], abs(vertical_distance))
+            elif vertical_distance > 0:
+                min_distances[2] = min(min_distances[2], abs(vertical_distance))
+            if horizontal_distance > 0:
+                min_distances[1] = min(min_distances[1], abs(horizontal_distance))
+            elif horizontal_distance < 0:
+                min_distances[3] = min(min_distances[3], abs(horizontal_distance))
+        min_distances = [0 if d == float('inf') else d for d in min_distances]
+        return tuple(min_distances)
+    
     def get_vision(self, position, vision_size=3):
         """
         Retourne une matrice (de taille vision_size x vision_size) représentant
@@ -362,6 +377,7 @@ class MazeWindow(arcade.Window):
     def setup(self):
         self.walls = arcade.SpriteList()
         self.pellets = arcade.SpriteList()
+        self.ghosts = arcade.SpriteList()
 
         # Chargement des murs et pellets depuis la map
         for (i, j), tile in self.env.maze.items():
@@ -376,7 +392,10 @@ class MazeWindow(arcade.Window):
                 self.pellets.append(sprite)
 
         self.player = self.create_sprite('assets/pacman.png', self.agent.position)
-        self.ghost = self.create_sprite('assets/ghost.png', self.env.ghost_position)
+        for i, ghost_position in enumerate(self.env.ghost_positions):
+            ghost_sprite = 'assets/ghost.png' if i == 0 else 'assets/ghost2.png'
+            ghost = self.create_sprite(ghost_sprite, ghost_position)
+            self.ghosts.append(ghost)
 
     def create_sprite(self, resource, state):
         sprite = arcade.Sprite(resource, 0.5)
@@ -389,12 +408,12 @@ class MazeWindow(arcade.Window):
         self.walls.draw()
         self.pellets.draw()
         self.player.draw()
-        self.ghost.draw()
+        self.ghosts.draw()
         arcade.draw_text(f'{self.agent}', 10, 10, arcade.csscolor.WHITE, 20)
 
     def on_update(self, delta_time):
         if (not self.env.pellet_manager.are_all_pellets_collected() and
-            self.agent.position != self.env.ghost_position):
+            self.agent.position not in self.env.ghost_positions):
             self.agent.do()
 
             # Suppression du sprite de pellet mangé
@@ -408,10 +427,11 @@ class MazeWindow(arcade.Window):
 
             self.player.center_x = (self.agent.position[1] + 0.5) * SPRITE_SIZE
             self.player.center_y = (self.env.height - self.agent.position[0] - 0.5) * SPRITE_SIZE
-            self.ghost.center_x = (self.env.ghost_position[1] + 0.5) * SPRITE_SIZE
-            self.ghost.center_y = (self.env.height - self.env.ghost_position[0] - 0.5) * SPRITE_SIZE
+            for i, ghost in enumerate(self.ghosts):
+                ghost.center_x = (self.env.ghost_positions[i][1] + 0.5) * SPRITE_SIZE
+                ghost.center_y = (self.env.height - self.env.ghost_positions[i][0] - 0.5) * SPRITE_SIZE
         else:
-            print(f"Score: {self.agent.score}")
+            #TOTOprint(f"Score: {self.agent.score}")
             self.agent.reset()
             self.setup()
 
@@ -429,20 +449,33 @@ class MazeWindow(arcade.Window):
 ###############################################################################
 
 if __name__ == "__main__":
-    env = Environment(MAZE, start=(1, 1), ghost_start=(9, 7))
-    agent = Agent(env, exploration=1.0, exploration_decay=0.999)
+    env = Environment(MAZE, start=(1, 1), ghost_starts=[(9, 9), (5, 9)]) 
+    agent = Agent(env, exploration=1.0, exploration_decay=0.99995)
+    episode_count = 0
+    max_episodes = 500000  # Set maximum episodes
 
     if os.path.exists(FILE_AGENT):
         agent.load(FILE_AGENT)
 
     window = MazeWindow(agent)
     window.setup()
+
+    # Add progress tracking
+    def update(dt):
+        global episode_count
+        if episode_count % 1000 == 0:
+            print(f"Episode {episode_count}, Score: {agent.score:.1f}, Exploration: {agent.exploration:.3f}")
+        if episode_count >= max_episodes:
+            arcade.close_window()
+        episode_count += 1
+
+    arcade.schedule(update, 1/60)
     arcade.run()
 
     agent.save(FILE_AGENT)
 
     plt.plot(agent.history)
-    plt.title("Score history")
+    plt.title(f"Score history ({episode_count} episodes)")
     plt.xlabel("Episodes")
     plt.ylabel("Score")
     plt.show()
