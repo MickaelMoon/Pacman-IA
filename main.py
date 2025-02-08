@@ -10,17 +10,23 @@ import collections
 ###############################################################################
 
 MAZE = """
-xxxxxxxxxxx
-xo.......ox
-x.xxx.xxx.x
-x.x.....x.x
-x.x.x.x.x.x
-x...x.x...x
-x.x.xxx.x.x
-x.x.....x.x
-x.xxx.xxx.x
-xo.......ox
-xxxxxxxxxxx
+xxxxxxxxxxxxxxxxx
+xo.............ox
+x.xxx.xxxxx.xxx.x
+x.x...........x.x
+x.x.xxx.x.xxx.x.x
+x...x.....x...x.x
+x.x.x.xxxxx.x.x.x
+x.x...........x.x
+x.xxx.xxxxx.xxx.x
+x.x...........x.x
+x.x.xxx.x.xxx.x.x
+x...x.....x...x.x
+x.x.x.xxxxx.x.x.x
+x.x...........x.x
+x.xxx.xxxxx.xxx.x
+xo.............ox
+xxxxxxxxxxxxxxxxx
 """
 
 FILE_AGENT = 'mouse.qtable'
@@ -46,13 +52,15 @@ MOVES = {
 }
 
 # Récompenses
-REWARD_OUT     = -200       # Sortie du labyrinthe
+REWARD_OUT     = -500       # Sortie du labyrinthe
 REWARD_WALL    = -200       # Collision avec un mur
 REWARD_REPEAT  = -5         # Malus pour revisiter une case
-REWARD_WIN     = 50000      # Récompense de victoire (tous les pellets ramassés)
-REWARD_PELLET  = 1000       # Ramasser un pellet (increased reward)
-REWARD_DEFAULT = -1         # Mouvement "normal" (adoucit pour un labyrinthe plus vaste)
-REWARD_GHOST   = -20000     # Collision avec le fantôme
+REWARD_WIN     = 500000     # Récompense de victoire (tous les pellets ramassés)
+REWARD_PELLET  = 5000       # Ramasser un pellet (increased reward)
+REWARD_DEFAULT = -2         # Mouvement "normal" (adoucit pour un labyrinthe plus vaste)
+REWARD_GHOST   = -100000    # Collision avec le fantôme
+REWARD_EAT_GHOST = 20000     # Reward for eating a ghost
+POWER_PELLET_DURATION = 40   # How many moves power pellet lasts
 
 WIN = 1
 LOOSE = 0
@@ -116,7 +124,7 @@ class Agent:
         self.env = env
         self.history = []
         self.score = None
-        self.qtable = QTable(learning_rate=0.2, discount_factor=0.95)
+        self.qtable = QTable(learning_rate=0.3, discount_factor=0.99)
         self.exploration = exploration
         self.exploration_decay = exploration_decay
         self.last_action = None
@@ -213,7 +221,7 @@ class PelletManager:
 ###############################################################################
 
 class Environment:
-    def __init__(self, text, start=(1, 1), ghost_starts=[(9, 7), (1, 9)]):
+    def __init__(self, text, start=(1, 1), ghost_starts=[(15, 1), (15, 15), (1, 15), (8, 8)]):
         rows = text.strip().split('\n')
         self.height = len(rows)
         self.width = len(rows[0])
@@ -222,6 +230,8 @@ class Environment:
         self.ghost_starts = ghost_starts
         self.ghost_positions = list(ghost_starts)
         self.visited_positions = set()
+        self.power_pellet_active = 0
+        self.eaten_ghosts = set()
         for i in range(self.height):
             for j in range(self.width):
                 self.maze[(i, j)] = rows[i][j]
@@ -255,10 +265,16 @@ class Environment:
         self.pellet_manager.reset_pellets()
         self.ghost_positions = list(self.ghost_starts)
         self.visited_positions = set()
+        self.power_pellet_active = 0
+        self.eaten_ghosts = set()
 
     def move_ghosts(self, pacman_position, pacman_last_action):
         """
-        Déplace les fantômes vers Pac-Man en utilisant différentes stratégies.
+        Implements the four classic ghost behaviors:
+        - Blinky (Red): Directly targets Pacman
+        - Pinky (Pink): Targets 4 tiles ahead of Pacman
+        - Inky (Cyan): Uses Blinky's position and Pacman's position
+        - Clyde (Orange): Targets Pacman when far, runs away when close
         """
         def bfs(start, goal):
             queue = collections.deque([[start]])
@@ -275,41 +291,95 @@ class Environment:
                         seen.add((nx, ny))
             return []
 
-        # Blinky (Red Ghost) - Directly targets Pac-Man's current position
-        path = bfs(self.ghost_positions[0], pacman_position)
+        if self.power_pellet_active > 0:
+        # Scared ghost behavior
+            for i, ghost_pos in enumerate(self.ghost_positions):
+                if i in self.eaten_ghosts:
+                    continue
+                # Run away from Pacman
+                scatter_points = [(1, 1), (1, 15), (15, 1), (15, 15)]
+                path = bfs(ghost_pos, scatter_points[i])
+                if len(path) > 1:
+                    self.ghost_positions[i] = path[1]
+            return 
+        # Blinky (Red Ghost) - Direct chase
+
+        distance_to_pacman = abs(self.ghost_positions[0][0] - pacman_position[0]) + \
+                            abs(self.ghost_positions[0][1] - pacman_position[1])
+        
+        if distance_to_pacman > 6:  # Only chase when far away
+            path = bfs(self.ghost_positions[0], pacman_position)
+        else:
+            # Move to scatter mode when close to Pacman
+            scatter_point = (1, 15)  # Top-left corner
+            path = bfs(self.ghost_positions[0], scatter_point)
+        
         if len(path) > 1:
             self.ghost_positions[0] = path[1]
 
-        # Inky (Cyan Ghost) - Uses both Blinky's position and Pac-Man's position
-        blinky_position = self.ghost_positions[0]
+
+        # Pinky (Pink Ghost) - Ambush 4 tiles ahead
         pacman_direction = MOVES[pacman_last_action]
-        vector = (pacman_position[0] + 2 * pacman_direction[0] - blinky_position[0],
-                  pacman_position[1] + 2 * pacman_direction[1] - blinky_position[1])
-        target_position = (blinky_position[0] + vector[0], blinky_position[1] + vector[1])
-        path = bfs(self.ghost_positions[1], target_position)
+        pinky_target = (
+            pacman_position[0] + 4 * pacman_direction[0],
+            pacman_position[1] + 4 * pacman_direction[1]
+        )
+        path = bfs(self.ghost_positions[1], pinky_target)
         if len(path) > 1:
             self.ghost_positions[1] = path[1]
 
+        # Inky (Cyan Ghost) - Uses Blinky's position
+        blinky_position = self.ghost_positions[0]
+        inky_vector = (
+            pacman_position[0] + 2 * pacman_direction[0] - blinky_position[0],
+            pacman_position[1] + 2 * pacman_direction[1] - blinky_position[1]
+        )
+        inky_target = (
+            blinky_position[0] + inky_vector[0],
+            blinky_position[1] + inky_vector[1]
+        )
+        path = bfs(self.ghost_positions[2], inky_target)
+        if len(path) > 1:
+            self.ghost_positions[2] = path[1]
+
+        # Clyde (Orange Ghost) - Scatter when close
+        distance_to_pacman = abs(self.ghost_positions[3][0] - pacman_position[0]) + \
+                    abs(self.ghost_positions[3][1] - pacman_position[1])
+        if distance_to_pacman > 8: 
+            path = bfs(self.ghost_positions[3], pacman_position)
+        else:
+            scatter_point = (15, 15)
+            path = bfs(self.ghost_positions[3], scatter_point)
+        if len(path) > 1:
+            self.ghost_positions[3] = path[1]
+
     def move(self, position, action):
-        """
-        Effectue le mouvement de Pac-Man selon l'action choisie et retourne
-        (nouvelle_position, reward).
-        """
         move = MOVES[action]
         new_position = (position[0] + move[0], position[1] + move[1])
         reward = 0
-
+    
         if new_position not in self.maze:
             reward += REWARD_OUT
         elif self.maze[new_position] == TILE_WALL:
             reward += REWARD_WALL
         elif new_position in self.ghost_positions:
-            reward += REWARD_GHOST
-            position = new_position
+            ghost_index = self.ghost_positions.index(new_position)
+            if self.power_pellet_active > 0 and ghost_index not in self.eaten_ghosts:
+                # Eat ghost
+                reward += REWARD_EAT_GHOST
+                self.eaten_ghosts.add(ghost_index)
+                self.ghost_positions[ghost_index] = self.ghost_starts[ghost_index]
+                position = new_position
+            else:
+                reward += REWARD_GHOST
+                position = new_position
         elif self.maze[new_position] in [TILE_PELLET, TILE_POWER_PELLET]:
+            if self.maze[new_position] == TILE_POWER_PELLET:
+                self.power_pellet_active = POWER_PELLET_DURATION
+                self.eaten_ghosts = set()
             reward += REWARD_PELLET
             position = new_position
-            self.maze[new_position] = ' '  # On enlève le pellet
+            self.maze[new_position] = ' '
             self.pellet_manager.collect_pellet(position)
             if self.pellet_manager.are_all_pellets_collected():
                 reward += REWARD_WIN
@@ -317,12 +387,16 @@ class Environment:
         else:
             reward += REWARD_DEFAULT
             position = new_position
-
+    
+        # Decrease power pellet timer
+        if self.power_pellet_active > 0:
+            self.power_pellet_active -= 1
+    
         if position in self.visited_positions:
             reward += REWARD_REPEAT
         else:
             self.visited_positions.add(position)
-
+    
         return position, reward
     
     def closest_pellet(self, position):
@@ -392,9 +466,10 @@ class MazeWindow(arcade.Window):
                 self.pellets.append(sprite)
 
         self.player = self.create_sprite('assets/pacman.png', self.agent.position)
+        ghost_sprites = ['assets/ghost.png', 'assets/ghost2.png', 
+                        'assets/ghost3.png', 'assets/ghost4.png']
         for i, ghost_position in enumerate(self.env.ghost_positions):
-            ghost_sprite = 'assets/ghost.png' if i == 0 else 'assets/ghost2.png'
-            ghost = self.create_sprite(ghost_sprite, ghost_position)
+            ghost = self.create_sprite(ghost_sprites[i], ghost_position)
             self.ghosts.append(ghost)
 
     def create_sprite(self, resource, state):
@@ -409,6 +484,18 @@ class MazeWindow(arcade.Window):
         self.pellets.draw()
         self.player.draw()
         self.ghosts.draw()
+        arcade.draw_text(f'{self.agent}', 10, 10, arcade.csscolor.WHITE, 20)
+
+        for i, ghost in enumerate(self.ghosts):
+            if self.env.power_pellet_active > 0 and i not in self.env.eaten_ghosts:
+                ghost.color = arcade.color.BLUE
+            else:
+                ghost.color = arcade.color.WHITE
+            ghost.draw()
+
+        if self.env.power_pellet_active > 0:
+            arcade.draw_text(f'Power: {self.env.power_pellet_active}', 
+                           10, 40, arcade.csscolor.WHITE, 20)
         arcade.draw_text(f'{self.agent}', 10, 10, arcade.csscolor.WHITE, 20)
 
     def on_update(self, delta_time):
@@ -449,10 +536,11 @@ class MazeWindow(arcade.Window):
 ###############################################################################
 
 if __name__ == "__main__":
-    env = Environment(MAZE, start=(1, 1), ghost_starts=[(9, 9), (5, 9)]) 
-    agent = Agent(env, exploration=1.0, exploration_decay=0.99995)
+    env = Environment(MAZE, start=(1, 1), 
+                     ghost_starts=[(15,15), (15, 1), (1, 15), (8, 8)])
+    agent = Agent(env, exploration=1.0, exploration_decay=0.99998)
     episode_count = 0
-    max_episodes = 500000  # Set maximum episodes
+    max_episodes = 10000000  # Set maximum episodes
 
     if os.path.exists(FILE_AGENT):
         agent.load(FILE_AGENT)
