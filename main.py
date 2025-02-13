@@ -13,7 +13,7 @@ from constante import FILE_AGENT, MAZE
 
 if __name__ == "__main__":
     env = Environment(MAZE, start=(1, 1), ghost_starts=[(9, 9), (5, 9)]) 
-    agent = Agent(env, exploration=0.0, exploration_decay=0.99995)
+    agent = Agent(env, exploration=1.0, exploration_decay=0.99995)
     episode_count = 0
     max_episodes = 500000  # Set maximum episodes
 

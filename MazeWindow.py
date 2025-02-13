@@ -14,7 +14,7 @@ class MazeWindow(arcade.Window):
         self.agent = agent
         self.env = agent.env
         arcade.set_background_color(arcade.color.BLACK)
-        self.set_update_rate(1 / 12)
+        self.set_update_rate(1 / 1200)
 
     def setup(self):
         self.walls = arcade.SpriteList()
