@@ -3,7 +3,7 @@
 ###############################################################################
 
 import arcade
-from constante import SPRITE_SIZE, TILE_PELLET, TILE_POWER_PELLET, TILE_WALL
+from constante import SPEED, SPRITE_SIZE, TILE_PELLET, TILE_POWER_PELLET, TILE_WALL
 
 
 class MazeWindow(arcade.Window):
@@ -14,7 +14,7 @@ class MazeWindow(arcade.Window):
         self.agent = agent
         self.env = agent.env
         arcade.set_background_color(arcade.color.BLACK)
-        self.set_update_rate(1 / 1200)
+        self.set_update_rate(1 / SPEED)
 
     def setup(self):
         self.walls = arcade.SpriteList()

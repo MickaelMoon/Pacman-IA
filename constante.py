@@ -48,3 +48,4 @@ LOOSE = 0
 
 # Paramètre graphique
 SPRITE_SIZE = 64
+SPEED = 12
